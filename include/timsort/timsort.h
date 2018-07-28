@@ -20,6 +20,7 @@ void merge_lo(LoInputIt loFirst, LoInputIt loLast,
         OutputIt destFirst, OutputIt destLast,
         Compare comp)
 {
+    (void) destLast;
     assert(std::distance(loFirst, loLast) + std::distance(hiFirst, hiLast)
             == std::distance(destFirst, destLast));
 
@@ -72,10 +73,48 @@ void merge_hi(LoInputIt loFirst, LoInputIt loLast,
             });
 }
 
-template <class RandomIt, class Compare>
-void merge_sort(RandomIt aFirst, RandomIt aLast, RandomIt bFirst, RandomIt bLast, Compare comp) {
-    using ValueT = typename std::iterator_traits<RandomIt>::value_type;
+template <class LoInputIt, class HiInputIt, class BufferIt, class Compare>
+void merge_lo_with_buffer(LoInputIt loFirst, LoInputIt loLast,
+        HiInputIt hiFirst, HiInputIt hiLast,
+        BufferIt bufferFirst, BufferIt bufferLast,
+        Compare comp)
+{
+    assert(loFirst < loLast);
+    assert(bufferFirst < bufferLast);
+    assert(std::distance(loFirst, loLast) == std::distance(bufferFirst, bufferLast));
 
+    std::copy(loFirst, loLast, bufferFirst);
+    try {
+        merge_lo(bufferFirst, bufferLast, hiFirst, hiLast, loFirst, hiLast, comp);
+    } catch (...) {
+        // Restore the initial state.
+        std::copy(bufferFirst, bufferLast, loFirst);
+        throw;
+    }
+}
+
+template <class LoInputIt, class HiInputIt, class BufferIt, class Compare>
+void merge_hi_with_buffer(LoInputIt loFirst, LoInputIt loLast,
+        HiInputIt hiFirst, HiInputIt hiLast,
+        BufferIt bufferFirst, BufferIt bufferLast,
+        Compare comp)
+{
+    assert(hiFirst < hiLast);
+    assert(bufferFirst < bufferLast);
+    assert(std::distance(hiFirst, hiLast) == std::distance(bufferFirst, bufferLast));
+
+    std::copy(hiFirst, hiLast, bufferFirst);
+    try {
+        merge_hi(loFirst, loLast, bufferFirst, bufferLast, loFirst, hiLast, comp);
+    } catch (...) {
+        // Restore the initial state.
+        std::copy(bufferFirst, bufferLast, hiFirst);
+        throw;
+    }
+}
+
+template <class RandomIt, class Compare, typename ValueT = typename std::iterator_traits<RandomIt>::value_type>
+void merge_sort(RandomIt aFirst, RandomIt aLast, RandomIt bFirst, RandomIt bLast, Compare comp, std::vector<ValueT> & buffer) {
     assert(aFirst < aLast);
     assert(bFirst < bLast);
     assert(aLast == bFirst);
@@ -90,53 +129,31 @@ void merge_sort(RandomIt aFirst, RandomIt aLast, RandomIt bFirst, RandomIt bLast
         return;
     }
 
+    static_assert(
+            std::numeric_limits<decltype(std::distance(aFirst, aLast))>::max() <=
+            std::numeric_limits<std::size_t>::max(),
+            "Size type must be at least as large as the distance type");
+
     auto const aSize = std::distance(aFirst, aLast);
     auto const bSize = std::distance(bFirst, bLast);
 
-    // Copy the contents from the smaller of A and B into temporary memory
+    // Copy the contents from the smaller of A and B into temporary memory and
+    // then merge.
     if (aSize < bSize) {
-        if (aSize <= 64) {
-            // Use a stack allocated array for small inputs
-            std::array<ValueT, 64u> temp;
-            std::copy(aFirst, aLast, temp.begin());
-            try {
-                merge_lo(temp.begin(), temp.begin() + aSize, bFirst, bLast, aFirst, bLast, comp);
-            } catch (...) {
-                // Restore the initial state
-                std::copy(temp.begin(), temp.begin() + aSize, aFirst);
-                throw;
-            }
+        if (static_cast<std::size_t>(aSize) <= buffer.size()) {
+            merge_lo_with_buffer(aFirst, aLast, bFirst, bLast, buffer.begin(), buffer.begin() + aSize, comp);
         } else {
-            std::vector<ValueT> temp{aFirst, aLast};
-            try {
-                merge_lo(temp.begin(), temp.end(), bFirst, bLast, aFirst, bLast, comp);
-            } catch (...) {
-                // Restore the initial state
-                std::copy(temp.begin(), temp.end(), aFirst);
-                throw;
-            }
+            std::vector<ValueT> temp;
+            temp.resize(aSize);
+            merge_lo_with_buffer(aFirst, aLast, bFirst, bLast, temp.begin(), temp.end(), comp);
         }
     } else {
-        if (bSize <= 64) {
-            // Use a stack allocated array for small inputs
-            std::array<ValueT, 64u> temp;
-            std::copy(bFirst, bLast, temp.begin());
-            try {
-                merge_hi(aFirst, aLast, temp.begin(), temp.begin() + bSize, aFirst, bLast, comp);
-            } catch (...) {
-                // Restore the initial state
-                std::copy(temp.begin(), temp.begin() + bSize, bFirst);
-                throw;
-            }
+        if (static_cast<std::size_t>(bSize) <= buffer.size()) {
+            merge_hi_with_buffer(aFirst, aLast, bFirst, bLast, buffer.begin(), buffer.begin() + bSize, comp);
         } else {
-            std::vector<ValueT> temp{bFirst, bLast};
-            try {
-                merge_hi(aFirst, aLast, temp.begin(), temp.end(), aFirst, bLast, comp);
-            } catch (...) {
-                // Restore the initial state
-                std::copy(temp.begin(), temp.end(), bFirst);
-                throw;
-            }
+            std::vector<ValueT> temp;
+            temp.resize(bSize);
+            merge_hi_with_buffer(aFirst, aLast, bFirst, bLast, temp.begin(), temp.end(), comp);
         }
     }
 }
@@ -193,6 +210,11 @@ void sort(RandomIt first, RandomIt last, Compare comp = Compare{}) {
         };
 
     auto const minRunSize = merge_compute_minirun(first, last);
+
+    // Allocate a buffer for common run sizes.
+    using ValueT = typename std::iterator_traits<RandomIt>::value_type;
+    std::vector<ValueT> buffer;
+    buffer.resize(minRunSize);
 
     // The main loop:
     // 1. Find runs
@@ -258,13 +280,13 @@ void sort(RandomIt first, RandomIt last, Compare comp = Compare{}) {
                     // Merge the smaller run of A and C with B
                     if (aSize < cSize) {
                         // Merge A and B
-                        detail::merge_sort(a.first, a.second, b.first, b.second, comp);
+                        detail::merge_sort(a.first, a.second, b.first, b.second, comp, buffer);
                         a.second = b.second;
                         b = c;
                         runs.pop_back();
                     } else {
                         // Merge B and C
-                        detail::merge_sort(b.first, b.second, c.first, c.second, comp);
+                        detail::merge_sort(b.first, b.second, c.first, c.second, comp, buffer);
                         b.second = c.second;
                         runs.pop_back();
                     }
@@ -277,7 +299,7 @@ void sort(RandomIt first, RandomIt last, Compare comp = Compare{}) {
             // |B| > |C|
             if (bSize <= cSize) {
                 // Merge B and C
-                detail::merge_sort(b.first, b.second, c.first, c.second, comp);
+                detail::merge_sort(b.first, b.second, c.first, c.second, comp, buffer);
                 b.second = c.second;
                 runs.pop_back();
 
@@ -296,7 +318,7 @@ void sort(RandomIt first, RandomIt last, Compare comp = Compare{}) {
         runs.pop_back();
         auto & a = runs.back();
 
-        detail::merge_sort(a.first, a.second, b.first, b.second, comp);
+        detail::merge_sort(a.first, a.second, b.first, b.second, comp, buffer);
         a = {a.first, b.second};
     }
 }

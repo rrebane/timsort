@@ -1,31 +1,76 @@
 # timsort
 
-This is an implementation of the [timsort](https://bugs.python.org/file4451/timsort.txt) sorting algorithm. It was inspired by [this](https://hackernoon.com/timsort-the-fastest-sorting-algorithm-youve-never-heard-of-36b28417f399) article and is only meant to be useful as a programming exercise.
+This is an implementation of the [timsort](https://bugs.python.org/file4451/timsort.txt) sorting algorithm. It was inspired by [this](https://hackernoon.com/timsort-the-fastest-sorting-algorithm-youve-never-heard-of-36b28417f399) article and is only meant to be useful as a programming exercise. The Wikipedia [article](https://en.wikipedia.org/wiki/Timsort) was also useful for implementing this.
 
 ## Build
 
 The implementation is header only. See `include/timsort/timsort.h`.
 
-### Tests and benchmarks
+### Benchmarks
 
 ```bash
 mkdir build
 cd build
-# (optional) BENCHMARK_ROOT is only needed for the benchmarks
+# (optional) BENCHMARK_ROOT is only needed for the benchmark binary
 BENCHMARK_ROOT=/path/to/google-benchmark/prefix cmake -DCMAKE_BUILD_TYPE=Release ..
 make
 make install # (optional) installs the header
 ```
 
 This will build two binaries:
-* `simple-test`: runs a test on randomized data and compares the speed of `timsort` to `std::sort`
-* `benchmark`: runs some benchmarks on `timsort` and `std::sort` (for comparison)
+* `simple-test`: runs a test on randomized data and compares the speed of `timsort` to `std::stable_sort`
+* `benchmark`: runs some benchmarks on `timsort` and `std::stable_sort` (for comparison)
 
 ## Benchmark results
 
-This implementation is slower than `std::sort` on random data. This is to be expected, `timsort` is designed to exploit existing structure in real data where the data is already partially sorted.
+### Comparison to `std::stable_sort`
+
+The comparison is done against `std::stable_sort` instead of `std::sort` because `timsort` is a stable sorting
+algorithm. This implementation is slower than `std::stable_sort` on random data. This is to be expected because
+`timsort` is designed to exploit existing structure in real data where the data is partially ordered.
+
+Benchmark details:
+
+* Sorting on arrays of random integers
+* `us/sort`: Time per sorting in microseconds
+* `diff`: shows speedup/slowdown compared to `std::stable_sort` (negative means `timsort` is faster)
 
 ```
+$ ./simple-test
+Max memory: 1073741824B, iterations: 10
+Test[size=1(4B),iter=10]: timsort 0.4605 us/sort, stdsort 0.2435 us/sort, diff 0.89117x
+Test[size=2(8B),iter=10]: timsort 0.3187 us/sort, stdsort 0.1487 us/sort, diff 1.14324x
+Test[size=4(16B),iter=10]: timsort 0.2542 us/sort, stdsort 0.1573 us/sort, diff 0.61602x
+Test[size=8(32B),iter=10]: timsort 0.3743 us/sort, stdsort 0.2506 us/sort, diff 0.493615x
+Test[size=16(64B),iter=10]: timsort 0.6039 us/sort, stdsort 0.5222 us/sort, diff 0.156453x
+Test[size=32(128B),iter=10]: timsort 0.7934 us/sort, stdsort 1.1524 us/sort, diff -0.311524x
+Test[size=64(256B),iter=10]: timsort 1.8047 us/sort, stdsort 2.2376 us/sort, diff -0.193466x
+Test[size=128(512B),iter=10]: timsort 4.1237 us/sort, stdsort 4.6333 us/sort, diff -0.109986x
+Test[size=256(1024B),iter=10]: timsort 9.432 us/sort, stdsort 10.0248 us/sort, diff -0.0591333x
+Test[size=512(2048B),iter=10]: timsort 21.298 us/sort, stdsort 21.8259 us/sort, diff -0.0241869x
+Test[size=1024(4096B),iter=10]: timsort 47.8119 us/sort, stdsort 45.7524 us/sort, diff 0.045014x
+Test[size=2048(8192B),iter=10]: timsort 105.811 us/sort, stdsort 104.862 us/sort, diff 0.00905091x
+Test[size=4096(16384B),iter=10]: timsort 239.739 us/sort, stdsort 221.199 us/sort, diff 0.083815x
+Test[size=8192(32768B),iter=10]: timsort 504.39 us/sort, stdsort 483.202 us/sort, diff 0.0438495x
+Test[size=16384(65536B),iter=10]: timsort 1105.72 us/sort, stdsort 1009.48 us/sort, diff 0.0953404x
+Test[size=32768(131072B),iter=10]: timsort 2376.11 us/sort, stdsort 2196.02 us/sort, diff 0.0820076x
+Test[size=65536(262144B),iter=10]: timsort 5109.05 us/sort, stdsort 4786.62 us/sort, diff 0.0673617x
+Test[size=131072(524288B),iter=10]: timsort 10876.2 us/sort, stdsort 9905.29 us/sort, diff 0.0980185x
+Test[size=262144(1048576B),iter=10]: timsort 23203 us/sort, stdsort 20609.1 us/sort, diff 0.125863x
+Test[size=524288(2097152B),iter=10]: timsort 50048.3 us/sort, stdsort 44716.4 us/sort, diff 0.119237x
+Test[size=1048576(4194304B),iter=10]: timsort 105920 us/sort, stdsort 93934.3 us/sort, diff 0.1276x
+Test[size=2097152(8388608B),iter=10]: timsort 221450 us/sort, stdsort 197502 us/sort, diff 0.121257x
+Test[size=4194304(16777216B),iter=10]: timsort 469389 us/sort, stdsort 408956 us/sort, diff 0.147773x
+Test[size=8388608(33554432B),iter=10]: timsort 975756 us/sort, stdsort 865319 us/sort, diff 0.127625x
+Test[size=16777216(67108864B),iter=10]: timsort 2.05006e+06 us/sort, stdsort 1.78773e+06 us/sort, diff 0.146735x
+Test[size=33554432(134217728B),iter=10]: timsort 4.31801e+06 us/sort, stdsort 3.74767e+06 us/sort, diff 0.152184x
+Test[size=67108864(268435456B),iter=10]: timsort 9.0888e+06 us/sort, stdsort 7.72677e+06 us/sort, diff 0.176274x
+```
+
+### Other benchmarks
+
+```
+$ ./benchmark
 2018-07-28 14:38:44
 Running ./benchmark
 Run on (4 X 2900 MHz CPU s)

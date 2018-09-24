@@ -15,10 +15,11 @@ namespace timsort {
 namespace detail {
 
 template <class LoInputIt, class HiInputIt, class OutputIt, class Compare>
-void merge_lo(LoInputIt loFirst, LoInputIt loLast,
+std::size_t merge_lo(LoInputIt loFirst, LoInputIt loLast,
         HiInputIt hiFirst, HiInputIt hiLast,
         OutputIt destFirst, OutputIt destLast,
-        Compare comp)
+        Compare comp,
+        std::size_t minGallopSize)
 {
     (void) destLast;
     assert(std::distance(loFirst, loLast) + std::distance(hiFirst, hiLast)
@@ -28,18 +29,90 @@ void merge_lo(LoInputIt loFirst, LoInputIt loLast,
     auto hiCurrent = hiFirst;
     auto destCurrent = destFirst;
 
-    while (true) {
-        if (comp(*loCurrent, *hiCurrent)) {
-            if (loCurrent == loLast) {
-                break;
+    // Do until one of the runs reaches the end.
+    while (loCurrent != loLast && hiCurrent != hiLast) {
+        std::size_t loGallopSize = 0u;
+        std::size_t hiGallopSize = 0u;
+
+        // Piece-wise element comparison and copying.
+        while (true) {
+            if (comp(*loCurrent, *hiCurrent)) {
+                if (loCurrent == loLast) {
+                    break;
+                }
+
+                *(destCurrent++) = *(loCurrent++);
+
+                if (++loGallopSize >= minGallopSize) {
+                    break;
+                }
+            } else {
+                if (hiCurrent == hiLast) {
+                    break;
+                }
+
+                *(destCurrent++) = *(hiCurrent++);
+
+                if (++hiGallopSize >= minGallopSize) {
+                    break;
+                }
             }
-            *(destCurrent++) = *(loCurrent++);
-        } else {
-            if (hiCurrent == hiLast) {
-                break;
-            }
-            *(destCurrent++) = *(hiCurrent++);
         }
+
+        if (loCurrent == loLast || hiCurrent == hiLast) {
+            break;
+        }
+
+        // Increase the minimum galloping size for the first iteration.
+        ++minGallopSize;
+
+        // Enter galloping mode. Copy elements until neither run is long enough
+        // to gallop anymore.
+        do {
+            // Decrease the minimum gallop size on each gallop.
+            if (minGallopSize > 1u) {
+                --minGallopSize;
+            }
+
+            // Find LO_current position in HI and copy elements until that
+            // position.
+            auto hiNext = std::lower_bound(hiCurrent, hiLast, *loCurrent, comp);
+            {
+                auto const gallopSize = std::distance(hiCurrent, hiNext);
+                assert(gallopSize >= 0);
+                hiGallopSize = static_cast<std::size_t>(gallopSize);
+            }
+
+            std::copy(hiCurrent, hiNext, destCurrent);
+            hiCurrent = hiNext;
+            destCurrent += hiGallopSize;
+            *(destCurrent++) = *(loCurrent++);
+
+            if (loCurrent == loLast || hiCurrent == hiLast) {
+                break;
+            }
+
+            // Find HI_current position in LO and copy elements until that
+            // position.
+            auto loNext = std::lower_bound(loCurrent, loLast, *hiCurrent, comp);
+            {
+                auto const gallopSize = std::distance(loCurrent, loNext);
+                assert(gallopSize >= 0);
+                loGallopSize = static_cast<std::size_t>(gallopSize);
+            }
+
+            std::copy(loCurrent, loNext, destCurrent);
+            loCurrent = loNext;
+            destCurrent += loGallopSize;
+            *(destCurrent++) = *(hiCurrent++);
+
+            if (loCurrent == loLast || hiCurrent == hiLast) {
+                break;
+            }
+        } while (loGallopSize >= minGallopSize || hiGallopSize >= minGallopSize);
+
+        // Increase the minimum gallop size when exiting galloping mode.
+        ++minGallopSize;
     }
 
     // Copy the remaining elements.
@@ -54,13 +127,16 @@ void merge_lo(LoInputIt loFirst, LoInputIt loLast,
     assert(loCurrent == loLast);
     assert(hiCurrent == hiLast);
     assert(destCurrent == destLast);
+
+    return minGallopSize;
 }
 
 template <class LoInputIt, class HiInputIt, class OutputIt, class Compare>
-void merge_hi(LoInputIt loFirst, LoInputIt loLast,
+std::size_t merge_hi(LoInputIt loFirst, LoInputIt loLast,
         HiInputIt hiFirst, HiInputIt hiLast,
         OutputIt destFirst, OutputIt destLast,
-        Compare comp)
+        Compare comp,
+        std::size_t minGallopSize)
 {
     using ValueT = typename std::iterator_traits<OutputIt>::value_type;
 
@@ -70,14 +146,16 @@ void merge_hi(LoInputIt loFirst, LoInputIt loLast,
             std::make_reverse_iterator(destLast), std::make_reverse_iterator(destFirst),
             [&comp](ValueT const & lhs, ValueT const & rhs) {
                 return !comp(lhs, rhs);
-            });
+            },
+            minGallopSize);
 }
 
 template <class LoInputIt, class HiInputIt, class BufferIt, class Compare>
-void merge_lo_with_buffer(LoInputIt loFirst, LoInputIt loLast,
+std::size_t merge_lo_with_buffer(LoInputIt loFirst, LoInputIt loLast,
         HiInputIt hiFirst, HiInputIt hiLast,
         BufferIt bufferFirst, BufferIt bufferLast,
-        Compare comp)
+        Compare comp,
+        std::size_t minGallopSize)
 {
     assert(loFirst < loLast);
     assert(bufferFirst < bufferLast);
@@ -85,7 +163,7 @@ void merge_lo_with_buffer(LoInputIt loFirst, LoInputIt loLast,
 
     std::copy(loFirst, loLast, bufferFirst);
     try {
-        merge_lo(bufferFirst, bufferLast, hiFirst, hiLast, loFirst, hiLast, comp);
+        return merge_lo(bufferFirst, bufferLast, hiFirst, hiLast, loFirst, hiLast, comp, minGallopSize);
     } catch (...) {
         // Restore the initial state.
         std::copy(bufferFirst, bufferLast, loFirst);
@@ -94,10 +172,11 @@ void merge_lo_with_buffer(LoInputIt loFirst, LoInputIt loLast,
 }
 
 template <class LoInputIt, class HiInputIt, class BufferIt, class Compare>
-void merge_hi_with_buffer(LoInputIt loFirst, LoInputIt loLast,
+std::size_t merge_hi_with_buffer(LoInputIt loFirst, LoInputIt loLast,
         HiInputIt hiFirst, HiInputIt hiLast,
         BufferIt bufferFirst, BufferIt bufferLast,
-        Compare comp)
+        Compare comp,
+        std::size_t minGallopSize)
 {
     assert(hiFirst < hiLast);
     assert(bufferFirst < bufferLast);
@@ -105,7 +184,7 @@ void merge_hi_with_buffer(LoInputIt loFirst, LoInputIt loLast,
 
     std::copy(hiFirst, hiLast, bufferFirst);
     try {
-        merge_hi(loFirst, loLast, bufferFirst, bufferLast, loFirst, hiLast, comp);
+        return merge_hi(loFirst, loLast, bufferFirst, bufferLast, loFirst, hiLast, comp, minGallopSize);
     } catch (...) {
         // Restore the initial state.
         std::copy(bufferFirst, bufferLast, hiFirst);
@@ -114,19 +193,24 @@ void merge_hi_with_buffer(LoInputIt loFirst, LoInputIt loLast,
 }
 
 template <class RandomIt, class Compare, typename ValueT = typename std::iterator_traits<RandomIt>::value_type>
-void merge_sort(RandomIt aFirst, RandomIt aLast, RandomIt bFirst, RandomIt bLast, Compare comp, std::vector<ValueT> & buffer) {
+std::size_t merge_sort(RandomIt aFirst, RandomIt aLast,
+        RandomIt bFirst, RandomIt bLast,
+        Compare comp,
+        std::size_t minGallopSize,
+        std::vector<ValueT> & buffer)
+{
     assert(aFirst < aLast);
     assert(bFirst < bLast);
     assert(aLast == bFirst);
 
     // Skip elements that are already in their final place, i.e. values from A
     // that are smaller than B_first and values from B that are larger than
-    // A_last - 1.
-    aFirst = std::lower_bound(aFirst, aLast, *bFirst);
-    bLast = std::upper_bound(bFirst, bLast, *(aLast - 1));
+    // A_last - 1 (last element in B).
+    aFirst = std::lower_bound(aFirst, aLast, *bFirst, comp);
+    bLast = std::upper_bound(bFirst, bLast, *(aLast - 1), comp);
 
     if (aFirst == aLast || bFirst == bLast) {
-        return;
+        return minGallopSize;
     }
 
     static_assert(
@@ -141,19 +225,19 @@ void merge_sort(RandomIt aFirst, RandomIt aLast, RandomIt bFirst, RandomIt bLast
     // then merge.
     if (aSize < bSize) {
         if (static_cast<std::size_t>(aSize) <= buffer.size()) {
-            merge_lo_with_buffer(aFirst, aLast, bFirst, bLast, buffer.begin(), buffer.begin() + aSize, comp);
+            return merge_lo_with_buffer(aFirst, aLast, bFirst, bLast, buffer.begin(), buffer.begin() + aSize, comp, minGallopSize);
         } else {
             std::vector<ValueT> temp;
             temp.resize(aSize);
-            merge_lo_with_buffer(aFirst, aLast, bFirst, bLast, temp.begin(), temp.end(), comp);
+            return merge_lo_with_buffer(aFirst, aLast, bFirst, bLast, temp.begin(), temp.end(), comp, minGallopSize);
         }
     } else {
         if (static_cast<std::size_t>(bSize) <= buffer.size()) {
-            merge_hi_with_buffer(aFirst, aLast, bFirst, bLast, buffer.begin(), buffer.begin() + bSize, comp);
+            return merge_hi_with_buffer(aFirst, aLast, bFirst, bLast, buffer.begin(), buffer.begin() + bSize, comp, minGallopSize);
         } else {
             std::vector<ValueT> temp;
             temp.resize(bSize);
-            merge_hi_with_buffer(aFirst, aLast, bFirst, bLast, temp.begin(), temp.end(), comp);
+            return merge_hi_with_buffer(aFirst, aLast, bFirst, bLast, temp.begin(), temp.end(), comp, minGallopSize);
         }
     }
 }
@@ -211,6 +295,15 @@ void sort(RandomIt first, RandomIt last, Compare comp = Compare{}) {
 
     auto const minRunSize = merge_compute_minirun(first, last);
 
+    // When merging two runs, the galloping mode is entered when minGallopSize
+    // consecutive elements from the same run are merged. In this mode, the end
+    // of the consecutive elements is found using binary search, after which the
+    // elements can be moved at the same time. Galloping mode is only faster
+    // than element-wise comparison if on average there is at least 7
+    // consecutive elements. This value is dynamically adjusted during the
+    // algorithm depending on how often the galloping mode pays off.
+    std::size_t minGallopSize = 7u;
+
     // Allocate a buffer for common run sizes.
     using ValueT = typename std::iterator_traits<RandomIt>::value_type;
     std::vector<ValueT> buffer;
@@ -249,9 +342,9 @@ void sort(RandomIt first, RandomIt last, Compare comp = Compare{}) {
             detail::insertion_sort(runFirst, runLast, comp);
             current = runLast;
         } else {
+            // Because this is a stable sort, the values in the descending runs have
+            // to be strictly decreasing (> not >=) to keep the stable order.
             if (isDescending) {
-                // Because this is a stable sort, the values in the descending runs have
-                // to be strictly decreasing (> not >=) to keep the stable order.
                 std::reverse(runFirst, current);
             }
         }
@@ -280,13 +373,15 @@ void sort(RandomIt first, RandomIt last, Compare comp = Compare{}) {
                     // Merge the smaller run of A and C with B
                     if (aSize < cSize) {
                         // Merge A and B
-                        detail::merge_sort(a.first, a.second, b.first, b.second, comp, buffer);
+                        minGallopSize =
+                            detail::merge_sort(a.first, a.second, b.first, b.second, comp, minGallopSize, buffer);
                         a.second = b.second;
                         b = c;
                         runs.pop_back();
                     } else {
                         // Merge B and C
-                        detail::merge_sort(b.first, b.second, c.first, c.second, comp, buffer);
+                        minGallopSize =
+                            detail::merge_sort(b.first, b.second, c.first, c.second, comp, minGallopSize, buffer);
                         b.second = c.second;
                         runs.pop_back();
                     }
@@ -299,7 +394,8 @@ void sort(RandomIt first, RandomIt last, Compare comp = Compare{}) {
             // |B| > |C|
             if (bSize <= cSize) {
                 // Merge B and C
-                detail::merge_sort(b.first, b.second, c.first, c.second, comp, buffer);
+                minGallopSize =
+                    detail::merge_sort(b.first, b.second, c.first, c.second, comp, minGallopSize, buffer);
                 b.second = c.second;
                 runs.pop_back();
 
@@ -318,7 +414,8 @@ void sort(RandomIt first, RandomIt last, Compare comp = Compare{}) {
         runs.pop_back();
         auto & a = runs.back();
 
-        detail::merge_sort(a.first, a.second, b.first, b.second, comp, buffer);
+        minGallopSize =
+            detail::merge_sort(a.first, a.second, b.first, b.second, comp, minGallopSize, buffer);
         a = {a.first, b.second};
     }
 }
